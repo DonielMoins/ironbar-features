@@ -104,17 +104,31 @@ overlay child (drawn on top).
 
 ## Measured cost (this laptop)
 
-Intel Iris Xe, 3840x2160@2x, Hyprland, release build:
+Release build, 3840x2160 at scale 2, Hyprland, Vulkan, 60 frames per case after a
+warm-up pass (`cargo run --release --features liquid-glass --example glass_bench`):
 
-| surface | buffer | glass | upload | readback | capture |
+| adapter | surface | buffer | glass | upload | readback |
 |---|---|---|---|---|---|
-| bar | 3820x76 | ~2.0 ms | 0.11 ms | 0.41 ms | ~17 ms |
-| control-centre sized panel | 840x1240 | ~7.0 ms | 1.95 ms | 8.0 ms | ~21 ms |
+| Intel Iris Xe (integrated) | bar | 3820x76 | 2.24 ms | 0.36 ms | 0.29 ms |
+| Intel Iris Xe (integrated) | 420x620 pt panel | 840x1240 | 6.30 ms | 0.90 ms | 0.33 ms |
+| NVIDIA T600 (discrete) | bar | 3820x76 | 1.43 ms | 0.34 ms | 0.27 ms |
+| NVIDIA T600 (discrete) | 420x620 pt panel | 840x1240 | 2.68 ms | 0.57 ms | 0.47 ms |
 
-The capture dominates and is a blocking round trip on a worker thread, which is
-why the design is capture-on-change rather than 60 Hz. Readback is a full
-pipeline stall, so a 620 pt panel is only affordable as a one-shot render; the
-bar strip is fine. Reproduce with:
+Capture is the expensive stage and is not in this table because the benchmark
+does not touch the compositor: a bar-strip `capture_output_region` measured
+~17 ms mean (p95 29.6 ms) on Hyprland, i.e. about one compositor frame, and it is
+a blocking round trip. That is why the design is capture-on-change rather than
+60 Hz. The first frame after startup also pays shader compilation (~58 ms glass
+for the first bar frame observed in-process), which is why only steady state is
+tabulated.
+
+Readback is a full pipeline stall, so a 620 pt panel is only affordable as a
+one-shot render; the bar strip is fine.
+
+Power: the discrete GPU on this machine never leaves `active` (another
+application holds a context, `runtime_suspended_time` stayed 0), so a wake cost
+could not be isolated here. `adapter = "auto"` prefers the integrated GPU for
+exactly that reason: a dGPU has to be woken for every capture.
 
 ```sh
 cargo run --release --features liquid-glass --example glass_bench
