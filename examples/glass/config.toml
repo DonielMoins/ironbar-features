@@ -1,0 +1,32 @@
+# Minimal bar showing the `liquid-glass` backdrop.
+#
+# Run with a build that has the feature enabled:
+#
+#   cargo build --release --features liquid-glass
+#   ./target/release/ironbar -c examples/glass/config.toml
+#
+# The glass needs a compositor that implements zwlr_screencopy_manager_v1
+# (Hyprland, Sway, ...). Without it the bar logs one warning and keeps its
+# normal CSS background.
+
+position = "bottom"
+height = 38
+anchor_to_edges = true
+exclusive_zone = false
+
+# A floating capsule: 5px margins on three sides, so the glass has a rim of
+# desktop behind it to refract.
+margin = { top = 0, bottom = 5, left = 5, right = 5 }
+
+glass = { enabled = true, preset = "regular", radius = 19, refresh = "on-change", adapter = "auto", pills = true }
+
+[[start]]
+type = "workspaces"
+
+[[center]]
+type = "clock"
+format = "%H:%M"
+
+[[end]]
+type = "label"
+label = "liquid-glass"

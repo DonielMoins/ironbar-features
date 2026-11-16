@@ -1,2 +1,4 @@
 /target
 .direnv/
+# Local verification output (screenshots contain desktop content).
+/artifacts

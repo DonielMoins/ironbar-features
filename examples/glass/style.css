@@ -1,0 +1,31 @@
+/* Companion style for the liquid-glass example.
+ *
+ * The glass backdrop replaces the bar's own background, so the container only
+ * needs transparent module backgrounds and light text. The backdrop widget adds
+ * the `liquid-glass` class; the bar window gains `liquid-glass-active` once the
+ * first frame has rendered, which drops the CSS background (see
+ * src/style.rs). */
+
+#bar {
+    background: transparent;
+    color: #e6e6e6;
+    padding: 0 4px;
+}
+
+#bar .container,
+#bar .module {
+    background: transparent;
+    min-height: 24px;
+}
+
+#bar .module {
+    padding: 0 6px;
+    margin: 4px 2px;
+    border-radius: 10px;
+}
+
+/* Readable on both bright and dark backdrops. */
+#bar label {
+    color: #f2f2f2;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
