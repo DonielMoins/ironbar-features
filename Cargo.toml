@@ -141,6 +141,19 @@ niri = ["dep:serde_json"]
 
 extras = ["dep:schemars", "dep:clap_complete"]
 
+# -- rendering features --
+
+# Apple-style liquid glass backdrop behind the bar.
+# Pulls in a wgpu device and a GLSL glass renderer; off by default because it is
+# a large dependency tree and needs a working screencopy-capable compositor.
+liquid-glass = [
+    "dep:wgpu",
+    "dep:liquid-rust",
+    "dep:pollster",
+    "dep:rustix",
+    "dep:memmap2",
+]
+
 # -- test features --
 "battery.test" = ["battery"]
 
@@ -224,6 +237,17 @@ serde_json = { version = "1.0.150", optional = true } # ipc, niri
 # extras
 schemars = { version = "1.2.1", optional = true, features = ["indexmap2"] }
 clap_complete = {  version = "4.6.5", optional = true }
+
+# liquid-glass
+wgpu = { version = "30.0.2", optional = true }
+liquid-rust = { version = "0.2.6", optional = true }
+pollster = { version = "0.4.0", optional = true }
+memmap2 = { version = "0.9.5", optional = true }
+
+[[example]]
+name = "glass_bench"
+path = "examples/glass_bench.rs"
+required-features = ["liquid-glass"]
 
 [build-dependencies]
 vergen-git2 = "9.1.0"

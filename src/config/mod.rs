@@ -63,6 +63,8 @@ pub use self::profiles::{Profile, ProfileUpdateEvent, Profiles, State};
 pub use self::sources::{Builtin, ConfigSource, CssSource, resolve_sources};
 pub use self::truncate::{EllipsizeMode, TruncateMode};
 
+pub use crate::glass::config::GlassConfig;
+
 use crate::Ironbar;
 use crate::modules::{AnyModuleFactory, ModuleFactory, ModuleInfo, ModuleRef};
 use color_eyre::Result;
@@ -482,6 +484,32 @@ pub struct BarConfig {
     /// **Default**: `[]`
     #[hot_reload(modules)]
     pub end: Option<Vec<ModuleConfig>>,
+
+    /// An Apple-style liquid glass backdrop rendered behind the bar.
+    ///
+    /// Requires Ironbar to be built with the `liquid-glass` cargo feature and a
+    /// compositor that supports `zwlr_screencopy_manager_v1` (Hyprland, Sway,
+    /// most wlroots compositors). When either is missing the bar logs one
+    /// warning and keeps its normal CSS background.
+    ///
+    /// **Default**: `null` (off)
+    ///
+    /// # Example
+    ///
+    /// ```corn
+    /// {
+    ///     glass = {
+    ///         enabled = true
+    ///         preset = "regular"
+    ///         tint = "#171918"
+    ///         radius = 19
+    ///         refresh = "on-change"
+    ///         adapter = "auto"
+    ///     }
+    /// }
+    /// ```
+    #[hot_reload(recreate)]
+    pub glass: Option<GlassConfig>,
 }
 
 impl Default for BarConfig {
@@ -503,6 +531,7 @@ impl Default for BarConfig {
             anchor_to_edges: true,
             popup_gap: 5,
             popup_autohide: false,
+            glass: None,
         }
     }
 }

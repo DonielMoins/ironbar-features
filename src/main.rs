@@ -46,6 +46,7 @@ mod config;
 mod desktop_file;
 mod dynamic_value;
 mod error;
+mod glass;
 mod gtk_helpers;
 mod image;
 #[cfg(feature = "ipc")]
