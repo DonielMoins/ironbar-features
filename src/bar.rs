@@ -13,7 +13,7 @@ use gtk_layer_shell::{Edge, LayerShell};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone)]
 enum Inner {
@@ -62,6 +62,10 @@ pub struct Bar {
     end: gtk::Box,
 
     autohide_state: Rc<RefCell<Option<AutohideState>>>,
+
+    /// Glass backdrop, when the `liquid-glass` feature and bar config enable it.
+    #[cfg(feature = "liquid-glass")]
+    glass: Option<Rc<crate::glass::GlassBackdrop>>,
 
     inner: Inner,
 }
@@ -113,6 +117,8 @@ impl Bar {
             center,
             end,
             autohide_state: rc_mut!(None),
+            #[cfg(feature = "liquid-glass")]
+            glass: None,
             inner: Inner::New {
                 config: Some(config),
             },
@@ -132,6 +138,34 @@ impl Bar {
             "Initializing bar '{}' on '{}'",
             self.name, self.monitor_name
         );
+
+        // The glass backdrop has to be built after the modules are loaded (its
+        // pill rectangles come from their allocations) and after the window is
+        // shown (its size comes from the layer-shell allocation). Capture the
+        // config it needs here, before `config` is consumed by `load_modules`.
+        #[cfg(feature = "liquid-glass")]
+        let glass_setup = config.glass.clone().map(|glass| {
+            (
+                glass,
+                config.margin,
+                config.anchor_to_edges,
+                monitor.clone(),
+            )
+        });
+
+        if let Some(glass) = &config.glass
+            && glass.is_enabled()
+        {
+            match crate::glass::decide(Some(glass), cfg!(feature = "liquid-glass")) {
+                crate::glass::GlassDecision::Render => {}
+                crate::glass::GlassDecision::FeatureMissing => warn!(
+                    "glass: bar '{}' requests a liquid glass backdrop, but this build has no \
+                     'liquid-glass' feature; keeping the CSS background",
+                    self.name
+                ),
+                crate::glass::GlassDecision::Disabled => {}
+            }
+        }
 
         let start_hidden = config
             .start_hidden
@@ -196,7 +230,124 @@ impl Bar {
             instance,
         };
 
+        #[cfg(feature = "liquid-glass")]
+        if let Some((config, margin, anchor_to_edges, monitor)) = glass_setup {
+            self.setup_glass(config, margin, anchor_to_edges, &monitor);
+        }
+
         self
+    }
+
+    /// Wraps the bar content in a `gtk::Overlay` with a glass layer behind it.
+    ///
+    /// The layer is a `gtk::DrawingArea` that paints the latest rendered frame;
+    /// it stays fully transparent until the first frame arrives, so a failure in
+    /// capture or on the GPU leaves the bar looking exactly like a plain build.
+    #[cfg(feature = "liquid-glass")]
+    fn setup_glass(
+        &mut self,
+        config: crate::glass::config::GlassConfig,
+        margin: MarginConfig,
+        anchor_to_edges: bool,
+        monitor: &Monitor,
+    ) {
+        use crate::glass::backdrop::{GlassBackdrop, bar_target, module_pills};
+        use std::cell::Cell;
+
+        let scale = f64::from(monitor.scale_factor());
+        let geometry = monitor.geometry();
+        let monitor_rect = (
+            geometry.x(),
+            geometry.y(),
+            geometry.width(),
+            geometry.height(),
+        );
+
+        let Some(backdrop) =
+            GlassBackdrop::new(&config, monitor.connector().map(String::from), scale)
+        else {
+            return;
+        };
+        let backdrop = Rc::new(backdrop);
+
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(backdrop.widget()));
+
+        // Re-parent: the window owns the content directly until now.
+        self.window.set_child(None::<&gtk::Widget>);
+        overlay.add_overlay(&self.content);
+        self.window.set_child(Some(&overlay));
+
+        let position = self.position;
+        let window = self.window.clone();
+        let content = self.content.clone();
+        let module_refs = self.modules().to_vec();
+
+        let update = Rc::new({
+            let backdrop = backdrop.clone();
+            move || {
+                let size = (window.width(), window.height());
+                let Some(target) =
+                    bar_target(monitor_rect, size, position, margin, anchor_to_edges)
+                else {
+                    return;
+                };
+
+                let physical = (
+                    (f64::from(size.0) * scale).round() as u32,
+                    (f64::from(size.1) * scale).round() as u32,
+                );
+                let pills = module_pills(&content, &module_refs, scale);
+
+                backdrop.refresh(target, physical, pills);
+            }
+        });
+
+        // Size allocations fire for every text change in every module; debounce
+        // them so a burst of updates costs one capture, not one per label.
+        let scheduled = Rc::new(Cell::new(false));
+        let schedule = {
+            let scheduled = scheduled.clone();
+            let update = update.clone();
+            move || {
+                if scheduled.replace(true) {
+                    return;
+                }
+
+                let scheduled = scheduled.clone();
+                let update = update.clone();
+                glib::timeout_add_local_once(Duration::from_millis(200), move || {
+                    scheduled.set(false);
+                    update();
+                });
+            }
+        };
+
+        for signal in [
+            self.window.connect_map({
+                let schedule = schedule.clone();
+                move |_| schedule()
+            }),
+            self.window.connect_realize({
+                let schedule = schedule.clone();
+                move |_| schedule()
+            }),
+        ] {
+            // The handler ids are not needed: each signal lives as long as the
+            // widget it is connected to, which lives as long as the bar.
+            let _ = signal;
+        }
+
+        // The first allocation happens after map; one deferred pass picks up the
+        // module allocations that are only final once the bar has been sized.
+        glib::timeout_add_local_once(Duration::from_millis(500), {
+            let update = update.clone();
+            move || update()
+        });
+
+        schedule();
+
+        self.glass = Some(backdrop);
     }
 
     /// Closes the bar, consuming it.

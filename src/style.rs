@@ -98,3 +98,40 @@ pub fn load_css(source: &CssSource, hot_reload: bool) {
         });
     }
 }
+
+/// Drops the CSS background of bars that are showing a glass backdrop.
+///
+/// Installed lazily, only once the first glass frame has actually been rendered,
+/// so a config that asks for glass on a machine that cannot render it keeps
+/// today's opaque CSS look instead of a transparent hole.
+///
+/// The selector is scoped to the class the glass backdrop adds to the bar
+/// container, so it never touches module or popup styling.
+#[cfg(feature = "liquid-glass")]
+pub fn set_glass_background_transparent() {
+    use std::sync::OnceLock;
+
+    static INSTALLED: OnceLock<()> = OnceLock::new();
+
+    INSTALLED.get_or_init(|| {
+        let provider = CssProvider::new();
+        provider.load_from_string(
+            ".liquid-glass-active #bar {\n\
+                 background: none;\n\
+                 background-color: transparent;\n\
+                 box-shadow: none;\n\
+             }",
+        );
+
+        // Deprecation warning is an error in gtk-rs bindings
+        // <https://github.com/gtk-rs/gtk4-rs/pull/2161>
+        #[allow(deprecated)]
+        gtk::StyleContext::add_provider_for_display(
+            &crate::get_display(),
+            &provider,
+            GTK_STYLE_PROVIDER_PRIORITY_USER as u32,
+        );
+
+        debug!("installed transparent background for glass bars");
+    });
+}
