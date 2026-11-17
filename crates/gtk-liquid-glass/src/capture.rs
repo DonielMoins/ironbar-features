@@ -143,7 +143,7 @@ impl State {
 
         self.destroy_pool();
 
-        let fd = rustix::fs::memfd_create("ironbar-glass", rustix::fs::MemfdFlags::CLOEXEC)
+        let fd = rustix::fs::memfd_create("gtk-liquid-glass", rustix::fs::MemfdFlags::CLOEXEC)
             .map_err(io::Error::from)?;
         rustix::fs::ftruncate(&fd, size as u64).map_err(io::Error::from)?;
 

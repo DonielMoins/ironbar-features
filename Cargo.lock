@@ -1589,6 +1589,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "gtk-liquid-glass"
+version = "0.1.0"
+dependencies = [
+ "glib",
+ "gtk4",
+ "gtk4-layer-shell",
+ "liquid-rust",
+ "memmap2",
+ "pollster",
+ "rustix 1.1.6",
+ "serde_json",
+ "tracing",
+ "wayland-client",
+ "wayland-protocols-wlr",
+ "wgpu",
+]
+
+[[package]]
 name = "gtk4"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2122,20 +2140,18 @@ dependencies = [
  "evdev-rs",
  "futures-lite",
  "glib",
+ "gtk-liquid-glass",
  "gtk4",
  "gtk4-layer-shell",
  "hyprland",
  "indexmap",
  "ironbar_macros",
  "libpulse-binding",
- "liquid-rust",
  "lua-src",
- "memmap2",
  "mlua",
  "mpd-utils",
  "mpris",
  "notify",
- "pollster",
  "reqwest",
  "rustix 1.1.6",
  "schemars",
@@ -2156,7 +2172,6 @@ dependencies = [
  "walkdir",
  "wayland-client",
  "wayland-protocols-wlr",
- "wgpu",
  "zbus 6.3.0",
 ]
 

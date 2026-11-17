@@ -7,14 +7,15 @@
 
 use std::time::Instant;
 
-use liquid_rust::{Color, Frame, Glass, Material, Rect, Renderer, Scene, Shape};
+use liquid_rust::{Color, Frame, Glass, Material, Rect, Renderer, Scene, Shadow, Shape};
 
-use super::config::{GlassAdapter, GlassConfig, GlassPreset, Tint};
+use crate::{Adapter as GlassAdapter, GlassConfig, Preset, Rgba};
 
 /// Every texture this module creates.
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
-/// A module pill to render on top of the bar capsule, in physical pixels.
+/// A pill (e.g. one bar module) rendered on top of the main capsule, in
+/// physical pixels relative to the window.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pill {
     /// Left edge.
@@ -30,8 +31,12 @@ pub struct Pill {
 /// One rendered frame plus the timings of the three stages.
 #[derive(Debug, Clone)]
 pub struct Rendered {
-    /// Tightly packed RGBA8 pixels of the glass output.
+    /// Tightly packed RGBA8 (straight alpha) of the window rectangle.
     pub rgba: Vec<u8>,
+    /// Width of `rgba` in physical pixels.
+    pub width: u32,
+    /// Height of `rgba` in physical pixels.
+    pub height: u32,
     /// Milliseconds spent in the glass shader.
     pub draw_ms: f64,
     /// Milliseconds spent uploading the backdrop to the GPU.
@@ -115,7 +120,9 @@ pub struct GlassRenderer {
 
     pills: Vec<Pill>,
     radius: f32,
-    preset: GlassPreset,
+    /// Window rectangle inside the (padded) backdrop, physical pixels.
+    inner: (u32, u32, u32, u32),
+    preset: Preset,
     tint: Option<Color>,
 }
 
@@ -150,7 +157,7 @@ impl GlassRenderer {
         };
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("ironbar-glass"),
+            label: Some("gtk-liquid-glass"),
             ..Default::default()
         }))
         .map_err(|err| format!("could not create wgpu device on '{}': {err}", raw.name))?;
@@ -174,6 +181,7 @@ impl GlassRenderer {
             readback,
             pills: Vec::new(),
             radius: 0.0,
+            inner: (0, 0, 1, 1),
             preset: config.preset,
             tint: config.tint.map(to_color),
         })
@@ -195,7 +203,7 @@ impl GlassRenderer {
         };
         let texture = |usage| {
             device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("ironbar-glass"),
+                label: Some("gtk-liquid-glass"),
                 size: extent,
                 mip_level_count: 1,
                 sample_count: 1,
@@ -212,7 +220,7 @@ impl GlassRenderer {
 
         let row = (4 * width).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ironbar-glass-readback"),
+            label: Some("gtk-liquid-glass-readback"),
             size: u64::from(row) * u64::from(height),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
@@ -221,43 +229,49 @@ impl GlassRenderer {
         (width, height, content, target, readback)
     }
 
-    /// Sets the pill rectangles and bar radius for the next render, in physical px.
-    pub fn set_layout(&mut self, radius: f32, pills: Vec<Pill>) {
+    /// Sets the window rectangle inside the backdrop, its corner radius and the
+    /// pill rectangles for the next render. All values are physical pixels;
+    /// `inner` is `(x, y, width, height)` of the window in the backdrop and
+    /// pills are relative to the window.
+    pub fn set_layout(&mut self, inner: (u32, u32, u32, u32), radius: f32, pills: Vec<Pill>) {
+        self.inner = inner;
         self.radius = radius;
         self.pills = pills;
     }
 
     /// Rebuilds the liquid-rust scene for the current size and layout.
     fn rebuild_scene(&mut self, scale: f32) {
-        let (width, height) = (self.size.0 as f32 / scale, self.size.1 as f32 / scale);
-        let radius = (self.radius / scale).clamp(0.0, height / 2.0);
-        let material = self.material();
+        let (ix, iy, iw, ih) = self.inner;
+        let (x, y) = (ix as f32 / scale, iy as f32 / scale);
+        let (width, height) = (iw as f32 / scale, ih as f32 / scale);
+        let radius = (self.radius / scale).clamp(0.0, width.min(height) / 2.0);
 
         let mut scene = Scene::new();
         scene.physics = false;
-        scene.glass_on_glass = true;
+        // Glass may not sample glass: with nesting on, each pill refracts the
+        // rendered capsule (and its neighbours through the container merge),
+        // which draws lens wedges between the pills.
+        scene.glass_on_glass = false;
         scene.appearance.dark = true;
 
-        let container = scene.add_container(12.0, 0);
         scene.add(
-            Glass::new(Rect::new(0.0, 0.0, width, height))
+            Glass::new(Rect::new(x, y, width, height))
                 .shape(Shape::Rounded(radius))
-                .material(material)
-                .container(container),
+                .material(surface_material(self.preset, self.tint, height)),
         );
 
         for pill in &self.pills {
+            let h = pill.height / scale;
             scene.add(
                 Glass::new(Rect::new(
-                    pill.x / scale,
-                    pill.y / scale,
+                    x + pill.x / scale,
+                    y + pill.y / scale,
                     pill.width / scale,
-                    pill.height / scale,
+                    h,
                 ))
-                .shape(Shape::Rounded(pill.height / scale / 2.0))
-                .material(Material::clear())
-                .z(1)
-                .container(container),
+                .shape(Shape::Rounded(h / 2.0))
+                .material(pill_material(h))
+                .z(1),
             );
         }
 
@@ -266,15 +280,9 @@ impl GlassRenderer {
         while self.scene.update(1.0 / 60.0) {}
     }
 
-    fn material(&self) -> Material {
-        match self.preset {
-            GlassPreset::Regular => Material::regular(),
-            GlassPreset::Clear => Material::clear(),
-            GlassPreset::Tinted => Material::tinted(self.tint.unwrap_or(Color::BLUE)),
-        }
-    }
-
-    /// Renders `backdrop` (tightly packed RGBA8, physical pixels) into the glass target.
+    /// Renders `backdrop` (tightly packed RGBA8 of `size` physical pixels, the
+    /// window plus lens padding) and returns the window rectangle only, with
+    /// everything outside the rounded corners made transparent.
     pub fn render(
         &mut self,
         backdrop: &[u8],
@@ -283,6 +291,14 @@ impl GlassRenderer {
     ) -> Result<Rendered, String> {
         if size.0 == 0 || size.1 == 0 {
             return Err("empty glass surface".to_owned());
+        }
+
+        let (ix, iy, iw, ih) = self.inner;
+        if iw == 0 || ih == 0 || ix + iw > size.0 || iy + ih > size.1 {
+            return Err(format!(
+                "window rect {:?} does not fit the {}x{} backdrop",
+                self.inner, size.0, size.1
+            ));
         }
 
         if self.size != size {
@@ -349,48 +365,60 @@ impl GlassRenderer {
             .map_err(|err| format!("draw poll: {err:?}"))?;
         let draw_ms = draw_started.elapsed().as_secs_f64() * 1000.0;
 
-        let row = (4 * size.0).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        // Read back only the window rectangle: the padding exists for the lens,
+        // never for display.
+        let row = (4 * iw).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         let readback_started = Instant::now();
         let mut encoder = self.device.create_command_encoder(&Default::default());
         encoder.copy_texture_to_buffer(
-            self.target.as_image_copy(),
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.target,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: ix, y: iy, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
             wgpu::TexelCopyBufferInfo {
                 buffer: &self.readback,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(row),
-                    rows_per_image: Some(size.1),
+                    rows_per_image: Some(ih),
                 },
             },
-            extent,
+            wgpu::Extent3d {
+                width: iw,
+                height: ih,
+                depth_or_array_layers: 1,
+            },
         );
         self.queue.submit([encoder.finish()]);
 
-        let slice = self.readback.slice(..);
+        let slice = self.readback.slice(..u64::from(row) * u64::from(ih));
         slice.map_async(wgpu::MapMode::Read, |_| {});
         self.device
             .poll(wgpu::PollType::wait_indefinitely())
             .map_err(|err| format!("readback poll: {err:?}"))?;
 
-        let mut rgba = Vec::with_capacity(expected);
+        let mut rgba = Vec::with_capacity(iw as usize * ih as usize * 4);
         {
             let data = slice
                 .get_mapped_range()
                 .map_err(|err| format!("map failed: {err}"))?;
-            if row == 4 * size.0 {
-                rgba.extend_from_slice(&data);
-            } else {
-                for y in 0..size.1 {
-                    let start = (y * row) as usize;
-                    rgba.extend_from_slice(&data[start..start + 4 * size.0 as usize]);
-                }
+            for y in 0..ih {
+                let start = (y * row) as usize;
+                rgba.extend_from_slice(&data[start..start + 4 * iw as usize]);
             }
         }
         self.readback.unmap();
         let readback_ms = readback_started.elapsed().as_secs_f64() * 1000.0;
 
+        let radius = self.radius.clamp(0.0, iw.min(ih) as f32 / 2.0);
+        mask_rounded(&mut rgba, iw, ih, radius);
+
         Ok(Rendered {
             rgba,
+            width: iw,
+            height: ih,
             draw_ms,
             upload_ms,
             readback_ms,
@@ -398,12 +426,107 @@ impl GlassRenderer {
     }
 }
 
-fn to_color(tint: Tint) -> Color {
+/// The main capsule material, tuned for a thin bar.
+///
+/// liquid-rust's presets are drawn for large iOS surfaces: a 30 pt bevel with
+/// 0.7 refraction. On a 38 pt capsule that bevel covers the whole rounded end,
+/// so the lens samples far outside the captured strip and the clamped edge
+/// texels show up as hard black/white wedges at the capsule ends. The bevel is
+/// kept to a third of the height, refraction and dispersion are lowered and the
+/// drop shadow (clipped by the window anyway) is dropped.
+pub fn surface_material(preset: Preset, tint: Option<Color>, height: f32) -> Material {
+    let base = match preset {
+        Preset::Regular => Material::regular(),
+        Preset::Clear => Material::clear(),
+    };
+
+    Material {
+        refraction: 0.35,
+        depth: (height / 3.0).clamp(4.0, 14.0),
+        dispersion: 0.04,
+        specular: 0.18,
+        rim: 0.08,
+        rim_shade: 0.0,
+        edge: 0.08,
+        shadow: Shadow {
+            offset_y: 0.0,
+            blur: 0.0,
+            opacity: 0.0,
+        },
+        tint,
+        // Always the dark tone: the adaptive flip turns a thin bar light grey
+        // over a dark desktop, which drowns white labels.
+        adaptive: false,
+        light_tone: base.dark_tone,
+        ..base
+    }
+}
+
+/// Module pill material: a lighter, flatter glass so each pill reads as its own
+/// surface on top of the ink capsule without competing with its label.
+pub fn pill_material(height: f32) -> Material {
+    Material {
+        refraction: 0.2,
+        depth: (height / 4.0).clamp(3.0, 8.0),
+        dispersion: 0.0,
+        frost: 8.0,
+        specular: 0.12,
+        rim: 0.06,
+        rim_shade: 0.0,
+        edge: 0.05,
+        shadow: Shadow {
+            offset_y: 0.0,
+            blur: 0.0,
+            opacity: 0.0,
+        },
+        // Ink lifted by ~15 %: same family as the capsule, one step lighter, so
+        // each module reads as its own surface and white labels keep contrast.
+        tint: Some(Color {
+            r: 0.24,
+            g: 0.25,
+            b: 0.245,
+            a: 0.55,
+        }),
+        adaptive: false,
+        light_tone: Material::regular().dark_tone,
+        ..Material::regular()
+    }
+}
+
+/// Clears everything outside a rounded rectangle of `radius` (physical px),
+/// with one pixel of anti-aliasing. Straight alpha.
+pub fn mask_rounded(rgba: &mut [u8], width: u32, height: u32, radius: f32) {
+    if radius <= 0.0 {
+        return;
+    }
+
+    let (w, h) = (width as f32, height as f32);
+    let corner = radius.ceil() as u32 + 1;
+
+    for y in 0..height {
+        let near_y = y < corner || y + corner >= height;
+        if !near_y {
+            continue;
+        }
+        for x in (0..width).filter(|&x| x < corner || x + corner >= width) {
+            let px = x as f32 + 0.5;
+            let py = y as f32 + 0.5;
+            let cx = px.clamp(radius, w - radius);
+            let cy = py.clamp(radius, h - radius);
+            let dist = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
+            let coverage = (radius - dist + 0.5).clamp(0.0, 1.0);
+            let alpha = &mut rgba[((y * width + x) * 4 + 3) as usize];
+            *alpha = (f32::from(*alpha) * coverage).round() as u8;
+        }
+    }
+}
+
+fn to_color(tint: Rgba) -> Color {
     Color {
-        r: f32::from(tint.r) / 255.0,
-        g: f32::from(tint.g) / 255.0,
-        b: f32::from(tint.b) / 255.0,
-        a: f32::from(tint.a) / 255.0,
+        r: tint.r,
+        g: tint.g,
+        b: tint.b,
+        a: tint.a,
     }
 }
 
@@ -446,10 +569,32 @@ mod tests {
 
     #[test]
     fn tint_converts_to_linear_scale() {
-        let color = to_color(Tint::from_rgba(0x33_66_99, 0x80));
+        let color = to_color(Rgba::from_u8(0x33, 0x66, 0x99, 0.5));
         assert!((color.r - 0.2).abs() < 1e-6);
         assert!((color.g - 0.4).abs() < 1e-6);
         assert!((color.b - 0.6).abs() < 1e-6);
-        assert!((color.a - 128.0 / 255.0).abs() < 1e-6);
+        assert!((color.a - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mask_clears_corners_and_keeps_the_body() {
+        let (w, h) = (80u32, 38u32);
+        let mut px = vec![255u8; (w * h * 4) as usize];
+        mask_rounded(&mut px, w, h, 19.0);
+        let a = |x: u32, y: u32| px[((y * w + x) * 4 + 3) as usize];
+        assert_eq!(a(0, 0), 0, "corner pixel is outside the capsule");
+        assert_eq!(a(w - 1, h - 1), 0);
+        assert_eq!(a(w / 2, 0), 255, "top edge centre is inside");
+        assert!(a(0, h / 2) >= 250, "capsule end centre is inside");
+        assert_eq!(a(40, 19), 255);
+    }
+
+    #[test]
+    fn bar_material_keeps_the_lens_inside_the_capsule() {
+        let m = surface_material(Preset::Regular, Some(to_color(Rgba::INK)), 38.0);
+        assert!(m.depth <= 38.0 / 2.0, "bevel must not span a capsule end");
+        assert!(m.refraction < Material::regular().refraction);
+        assert_eq!(m.shadow.opacity, 0.0);
+        assert!(m.tint.is_some());
     }
 }

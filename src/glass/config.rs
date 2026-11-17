@@ -43,18 +43,19 @@ pub struct GlassConfig {
     /// **Default**: `regular`
     pub preset: GlassPreset,
 
-    /// Tint colour as `#rrggbb` or `#rrggbbaa`, used by the `tinted` preset.
-    /// Ignored by other presets.
+    /// Tint colour as `#rrggbb` or `#rrggbbaa`; alpha is the strength. Applies
+    /// to every preset (`tinted` is kept as an alias of `regular`).
     ///
-    /// **Default**: `null`
+    /// **Default**: `#1719188c` (MoinsTech ink at 55 %)
     #[cfg_attr(feature = "extras", schemars(with = "String"))]
     pub tint: Option<Tint>,
 
     /// Corner radius of the bar capsule in pixels.
     ///
-    /// `0` derives a capsule from the bar height (`height / 2`).
+    /// `0` derives a capsule from the bar height (`height / 2`). Values above
+    /// half the height are clamped to a capsule.
     ///
-    /// **Default**: `0`
+    /// **Default**: `19`
     pub radius: f32,
 
     /// How often the backdrop is re-captured.
@@ -93,8 +94,8 @@ impl Default for GlassConfig {
         Self {
             enabled: true,
             preset: GlassPreset::default(),
-            tint: None,
-            radius: 0.0,
+            tint: Some(Tint::MOINSTECH_INK),
+            radius: 19.0,
             refresh: GlassRefresh::default(),
             adapter: GlassAdapter::default(),
             pills: true,
@@ -106,15 +107,6 @@ impl GlassConfig {
     /// Whether the effect should actually be built.
     pub fn is_enabled(&self) -> bool {
         self.enabled
-    }
-
-    /// Corner radius in physical pixels for a bar of `height` physical pixels.
-    pub fn radius_px(&self, height: u32) -> f32 {
-        if self.radius > 0.0 {
-            self.radius
-        } else {
-            height as f32 / 2.0
-        }
     }
 }
 
@@ -146,6 +138,9 @@ pub struct Tint {
 }
 
 impl Tint {
+    /// MoinsTech ink, `rgba(23, 25, 24, 0.55)`: the default tint.
+    pub const MOINSTECH_INK: Self = Self::from_rgba(0x17_19_18, 140);
+
     /// Builds a tint from an `0xRRGGBBAA` word.
     pub const fn from_rgba(rgb: u32, a: u8) -> Self {
         Self {
@@ -311,8 +306,12 @@ mod tests {
 
         assert!(config.enabled);
         assert_eq!(config.preset, GlassPreset::Regular);
-        assert_eq!(config.tint, None);
-        assert_eq!(config.radius, 0.0);
+        assert_eq!(config.tint, Some(Tint::MOINSTECH_INK));
+        assert_eq!(
+            config.tint.map(|t| t.to_string()).as_deref(),
+            Some("#1719188c")
+        );
+        assert_eq!(config.radius, 19.0);
         assert_eq!(config.refresh, GlassRefresh::OnChange);
         assert_eq!(config.adapter, GlassAdapter::Auto);
         assert!(config.pills);
@@ -389,18 +388,6 @@ mod tests {
             Err("tint '#FFF' must be #rrggbb or #rrggbbaa".to_owned())
         );
         assert!("#zzzzzz".parse::<Tint>().is_err());
-    }
-
-    #[test]
-    fn radius_falls_back_to_capsule() {
-        let config = GlassConfig::default();
-        assert_eq!(config.radius_px(76), 38.0);
-
-        let config = GlassConfig {
-            radius: 19.0,
-            ..GlassConfig::default()
-        };
-        assert_eq!(config.radius_px(76), 19.0);
     }
 
     #[test]

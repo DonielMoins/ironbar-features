@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "crates/gtk-liquid-glass"]
+
 [package]
 name = "ironbar"
 version = "0.20.0-pre"
@@ -146,13 +149,7 @@ extras = ["dep:schemars", "dep:clap_complete"]
 # Apple-style liquid glass backdrop behind the bar.
 # Pulls in a wgpu device and a GLSL glass renderer; off by default because it is
 # a large dependency tree and needs a working screencopy-capable compositor.
-liquid-glass = [
-    "dep:wgpu",
-    "dep:liquid-rust",
-    "dep:pollster",
-    "dep:rustix",
-    "dep:memmap2",
-]
+liquid-glass = ["dep:gtk-liquid-glass"]
 
 # -- test features --
 "battery.test" = ["battery"]
@@ -239,15 +236,7 @@ schemars = { version = "1.2.1", optional = true, features = ["indexmap2"] }
 clap_complete = {  version = "4.6.5", optional = true }
 
 # liquid-glass
-wgpu = { version = "30.0.2", optional = true }
-liquid-rust = { version = "0.2.6", optional = true }
-pollster = { version = "0.4.0", optional = true }
-memmap2 = { version = "0.9.5", optional = true }
-
-[[example]]
-name = "glass_bench"
-path = "examples/glass_bench.rs"
-required-features = ["liquid-glass"]
+gtk-liquid-glass = { path = "crates/gtk-liquid-glass", optional = true }
 
 [build-dependencies]
 vergen-git2 = "9.1.0"
