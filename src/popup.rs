@@ -33,6 +33,9 @@ pub struct Popup {
     pos: BarPosition,
     current_widget: Rc<RefCell<Option<CurrentWidgetInfo>>>,
     autohide: bool,
+    /// Glass for popup contents, keyed by widget id; built lazily on first show.
+    #[cfg(feature = "liquid-glass")]
+    glass: RefCell<Option<(gtk_liquid_glass::GlassConfig, HashMap<usize, gtk::Overlay>)>>,
 }
 
 impl Debug for Popup {
@@ -78,7 +81,36 @@ impl Popup {
             pos,
             current_widget: rc_mut!(None),
             autohide,
+            #[cfg(feature = "liquid-glass")]
+            glass: RefCell::new(None),
         }
+    }
+
+    /// Renders popup contents on liquid glass (`liquid-glass` feature).
+    #[cfg(feature = "liquid-glass")]
+    pub fn set_glass(&self, config: gtk_liquid_glass::GlassConfig) {
+        *self.glass.borrow_mut() = Some((config, HashMap::new()));
+    }
+
+    /// The widget to put in the popover for `content`: the content itself, or
+    /// a glass overlay around it when glass is enabled.
+    fn popover_child(&self, widget_id: usize, content: &gtk::Box) -> gtk::Widget {
+        #[cfg(feature = "liquid-glass")]
+        if let Some((config, overlays)) = self.glass.borrow_mut().as_mut() {
+            let overlay = overlays.entry(widget_id).or_insert_with(|| {
+                let glass = gtk_liquid_glass::GlassWidget::new(content, config);
+                let popover = self.popover.clone();
+                glass.connect_first_frame(move |_| {
+                    popover.add_css_class("liquid-glass-active");
+                    crate::style::set_glass_background_transparent();
+                });
+                glass.overlay()
+            });
+            return overlay.clone().upcast();
+        }
+
+        let _ = widget_id;
+        content.clone().upcast()
     }
 
     pub fn set_position(&self, pos: BarPosition, gap: i32) {
@@ -154,7 +186,8 @@ impl Popup {
             };
 
             content.add_css_class("popup");
-            self.popover.set_child(Some(content));
+            self.popover
+                .set_child(Some(&self.popover_child(widget_id, content)));
             self.popover.unparent();
             self.popover.set_parent(&button);
 
@@ -183,7 +216,8 @@ impl Popup {
             *self.current_widget.borrow_mut() = Some(CurrentWidgetInfo { widget_id });
 
             content.add_css_class("popup");
-            self.popover.set_child(Some(content));
+            self.popover
+                .set_child(Some(&self.popover_child(widget_id, content)));
             self.popover.unparent();
             self.popover.set_parent(button);
 

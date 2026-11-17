@@ -99,14 +99,15 @@ pub fn load_css(source: &CssSource, hot_reload: bool) {
     }
 }
 
-/// Drops the CSS background of bars that are showing a glass backdrop.
+/// Drops the CSS background of bars and popups that are showing a glass backdrop.
 ///
 /// Installed lazily, only once the first glass frame has actually been rendered,
 /// so a config that asks for glass on a machine that cannot render it keeps
 /// today's opaque CSS look instead of a transparent hole.
 ///
-/// The selector is scoped to the class the glass backdrop adds to the bar
-/// container, so it never touches module or popup styling.
+/// The selectors are scoped to the `liquid-glass-active` class added to the bar
+/// window or popover on its first glass frame, so module styling is untouched
+/// and a popup without glass keeps its CSS background.
 #[cfg(feature = "liquid-glass")]
 pub fn set_glass_background_transparent() {
     use std::sync::OnceLock;
@@ -116,10 +117,13 @@ pub fn set_glass_background_transparent() {
     INSTALLED.get_or_init(|| {
         let provider = CssProvider::new();
         provider.load_from_string(
-            ".liquid-glass-active #bar {\n\
+            ".liquid-glass-active #bar,\n\
+             popover.liquid-glass-active > contents,\n\
+             popover.liquid-glass-active .popup {\n\
                  background: none;\n\
                  background-color: transparent;\n\
                  box-shadow: none;\n\
+                 border-color: transparent;\n\
              }",
         );
 

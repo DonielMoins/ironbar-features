@@ -756,6 +756,19 @@ impl Bar {
             config.popup_gap,
             config.popup_autohide,
         );
+        #[cfg(feature = "liquid-glass")]
+        if let Some(glass) = config.glass.as_ref().filter(|glass| glass.is_enabled()) {
+            popup.set_glass(gtk_liquid_glass::GlassConfig {
+                // Popups are not capsules; keep the configured radius but never
+                // derive one from their (tall) height.
+                radius: if glass.radius > 0.0 {
+                    glass.radius
+                } else {
+                    19.0
+                },
+                ..glass.to_glass()
+            });
+        }
         let popup = Rc::new(popup);
 
         let mut refs = vec![];
